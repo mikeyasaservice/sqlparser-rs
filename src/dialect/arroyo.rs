@@ -220,4 +220,10 @@ impl Dialect for ArroyoDialect {
     fn supports_insert_table_alias(&self) -> bool {
         true
     }
+
+    /// Enable SQL `MATCH_RECOGNIZE` parsing. The Arroyo planner lowers the
+    /// resulting `TableFactor::MatchRecognize` to the `arroyo-cep` engine.
+    fn supports_match_recognize(&self) -> bool {
+        true
+    }
 }

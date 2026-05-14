@@ -12,7 +12,8 @@
 
 use sqlparser::ast::helpers::stmt_create_table::CreateTableBuilder;
 use sqlparser::ast::{
-    BinaryOperator, ColumnOption, Expr, HiveDistributionStyle, Spanned, Statement, TableConstraint,
+    AfterMatchSkip, BinaryOperator, ColumnOption, Expr, HiveDistributionStyle,
+    MatchRecognizePattern, RowsPerMatch, SetExpr, Spanned, Statement, TableConstraint, TableFactor,
 };
 use sqlparser::dialect::{ArroyoDialect, GenericDialect, HiveDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
@@ -239,4 +240,44 @@ fn invalid_connector_partitions() {
         let sql = format!("CREATE TABLE ice (ts TIMESTAMP) WITH (connector = 'iceberg') {suffix}");
         assert!(Parser::parse_sql(&ArroyoDialect {}, &sql).is_err(), "{sql}");
     }
+}
+
+#[test]
+fn match_recognize_round_trip() {
+    let sql = "SELECT * FROM events MATCH_RECOGNIZE(\
+        PARTITION BY user_id \
+        ORDER BY ts \
+        MEASURES FIRST(a.price) AS first_price, COUNT(b.*) AS drops \
+        ONE ROW PER MATCH \
+        AFTER MATCH SKIP PAST LAST ROW \
+        PATTERN (a b{2,5} c*) \
+        DEFINE a AS price > 100, b AS price < 50, c AS price > 100) AS m";
+    let Statement::Query(query) = arroyo().verified_stmt(sql) else {
+        panic!("expected query");
+    };
+    let SetExpr::Select(select) = *query.body else {
+        panic!("expected select");
+    };
+    let TableFactor::MatchRecognize {
+        partition_by,
+        order_by,
+        measures,
+        rows_per_match,
+        after_match_skip,
+        pattern,
+        symbols,
+        alias,
+        ..
+    } = &select.from[0].relation
+    else {
+        panic!("expected MATCH_RECOGNIZE table factor");
+    };
+    assert_eq!(partition_by.len(), 1);
+    assert_eq!(order_by.len(), 1);
+    assert_eq!(measures.len(), 2);
+    assert_eq!(rows_per_match, &Some(RowsPerMatch::OneRow));
+    assert_eq!(after_match_skip, &Some(AfterMatchSkip::PastLastRow));
+    assert!(matches!(pattern, MatchRecognizePattern::Concat(parts) if parts.len() == 3));
+    assert_eq!(symbols.len(), 3);
+    assert_eq!(alias.as_ref().unwrap().name.value, "m");
 }
